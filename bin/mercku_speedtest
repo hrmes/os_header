@@ -1,0 +1,250 @@
+#!/bin/sh
+
+
+# speedtest [-f] ifname
+#   Measure the tcp performance of current wan network in async mode.
+#   -f: force a new test even the cache is still valid.
+#
+# return 0: success, output is in /tmp/wan_speed
+#        1: network is unreachable
+#        2: creating temp file fails
+#        3: a new testing is started
+#        4: another test is on going
+#
+# OUTPUT file format (down and up are missing if code is not 0):
+# code:<error_code>
+# up:xxx
+# down:xxx
+
+# Globals
+# outbound interface
+IFACE=
+# cached speedtest result
+OUTPUT=/tmp/wan_speed
+# in sec
+OUTPUT_EXPIRE=200
+# we use netperf
+# TESTHOST="netperf.bufferbloat.net"
+TESTHOST="speedtest.merckuwifi.com"
+# # of concurrent netperf invocations
+# This should be set dynamically according to available mem/cpu
+MAXSESSIONS="8"
+# -l testlen for netperf
+TESTDUR=10
+# mutex to avoid multiple tests
+LOCK_DIR=/var/lock/wan_speedtest
+PID_FILE=$LOCK_DIR/pid
+# seconds to wait to acquire the lock
+MAX_RETRY=2
+# estimated bandwidth accordign to dl
+BANDWIDTH=0
+# force a new test
+FORCE=0
+DEBUG=
+
+print_usage() {
+    echo "Usage: $0 [options] <iface>"
+    echo "Options:"
+    echo "  -f force a new test even the cache is still valid"
+}
+
+IFACE=
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f)
+            FORCE=1
+            shift
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            print_usage
+            exit 1
+            ;;
+        *)
+            IFACE="$1"
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$IFACE" ]]; then
+    echo "Missing arguments"
+    print_usage
+    exit 1
+fi
+
+trap "rm -rf $LOCK_DIR" INT
+# TODO: CHANGE ARGUMENT
+set_parallel() {
+    mem_count=$(free | awk '/Mem:/{print int(($4/$2*100-10)/2.5)}')
+    cpu_count=$(awk '/^cpu /{print int(((1-($2+$4)/($2+$4+$5))*100-10)/4.5)}' /proc/stat)
+    [[ $mem_count -lt $cpu_count ]] && MAXSESSIONS=$mem_count || MAXSESSIONS=$cpu_count
+    [[ "$MAXSESSIONS" -lt 1 ]] && MAXSESSIONS=1
+}
+
+gen_error() {
+    echo "code:$1"
+}
+
+# $1: test direction, down or up
+# $2: output file
+measure_direction() {
+    DIRECTION=$1
+
+    # Start netperf with the proper direction
+    if [[ "$DIRECTION" == "down" ]]; then
+        dir="TCP_MAERTS"
+        xx="rx"
+    else
+        dir="TCP_STREAM"
+        xx="tx"
+    fi
+
+    # Start $MAXSESSIONS datastreams between netperf client and the netperf server
+    # netperf writes the sole output value (in bps) to stdout when completed
+    pids=
+    # system rx/tx stats for iface
+    xx_before=$(cat /sys/class/net/$IFACE/statistics/${xx}_bytes)
+    # temp files to hold each test result
+    # SPEEDFILES=
+    set_parallel
+    for i in $(seq $MAXSESSIONS); do
+        # Note: we found that sometimes netperf might report incorrect speed which
+        #       the system stats are correct. so, let's use the system value directly
+        #       and netperf is only used to generate traffic.
+        # TMPF=`mktemp /tmp/netperfUL.XXXXXX`
+        # SPEEDFILES="$SPEEDFILES $TMPF"
+        # netperf -4 -H $TESTHOST -t $dir -l $TESTDUR -v 0 -P 0 -f k >> $TMPF &
+        netperf -4 -H $TESTHOST -t $dir -l $TESTDUR -v 0 -P 0 -f k &
+        pids="$pids $!"
+    done
+    # force kill netperf in case waiting too long
+    (
+        sleep $((TESTDUR + 10))
+        kill -9 $pids > /dev/null 2>&1
+    ) &
+    watchdog=$!
+    wait $pids && kill -9 $watchdog
+    xx_after=$(cat /sys/class/net/$IFACE/statistics/${xx}_bytes)
+
+    speed=$(echo "${xx_before} ${xx_after}" | awk "{printf(\"%.0f\", (\$2-\$1)/$TESTDUR*8)}" || echo 0)
+    # use %0.f to avoid int overflow
+    # speed=`awk '{s+=$1} END {printf("%.0f", s * 1000)}' $SPEEDFILES || echo 0`
+    # rm -f $SPEEDFILES
+    echo "$1:$speed" >> $2
+    # [[ "$DIRECTION" == "down" ]] && flash set MERCKU_BANDWIDTH $speed
+    [[ "$DIRECTION" == "down" ]] && uci set network.wan.bandwidth=$speed && uci commit network
+}
+
+get_latency() {
+    local output_file=$1
+    local ping_result="/tmp/ping_result"
+
+    rm $ping_result 2> /dev/null
+    ping check.merckuwifi.com -c 5 -w 20 | awk 'BEGIN{FS="[ /]";OFS="\n"} {if($8$9=="packetloss") print "loss_rate="$7/1 ; if($1=="round-trip") print "min="$6/1,"avg="$7/1,"max="$8/1}' >> $ping_result &
+    ping check.merckuwifi.com -c 5 -w 20 | awk 'BEGIN{FS="[ /]";OFS="\n"} {if($8$9=="packetloss") print "loss_rate="$7/1 ; if($1=="round-trip") print "min="$6/1,"avg="$7/1,"max="$8/1}' >> $ping_result &
+    ping check.merckuwifi.com -c 5 -w 20 | awk 'BEGIN{FS="[ /]";OFS="\n"} {if($8$9=="packetloss") print "loss_rate="$7/1 ; if($1=="round-trip") print "min="$6/1,"avg="$7/1,"max="$8/1}' >> $ping_result &
+    ping check.merckuwifi.com -c 5 -w 20 | awk 'BEGIN{FS="[ /]";OFS="\n"} {if($8$9=="packetloss") print "loss_rate="$7/1 ; if($1=="round-trip") print "min="$6/1,"avg="$7/1,"max="$8/1}' >> $ping_result &
+    ping check.merckuwifi.com -c 5 -w 20 | awk 'BEGIN{FS="[ /]";OFS="\n"} {if($8$9=="packetloss") print "loss_rate="$7/1 ; if($1=="round-trip") print "min="$6/1,"avg="$7/1,"max="$8/1}' >> $ping_result &
+    ping check.merckuwifi.com -c 5 -w 20 | awk 'BEGIN{FS="[ /]";OFS="\n"} {if($8$9=="packetloss") print "loss_rate="$7/1 ; if($1=="round-trip") print "min="$6/1,"avg="$7/1,"max="$8/1}' >> $ping_result
+
+    awk -F '[=.]' 'BEGIN{OFS="\n";loss_rate=0;min=0;avg=0;max=0;avg_num=0;rate_num=0;} {if($1=="loss_rate"){loss_rate+=$2;rate_num+=1};if($1=="min" && ($2<min || min==0)){min=$2};if($1=="max" && $2>max){max=$2};if($1=="avg"){avg+=$2;avg_num+=1}} END{if(avg_num==0){avg=0}else{avg=avg/avg_num;sub(/\.[1-9]*/,"",avg)};if(rate_num==0){loss_rate=0}else{loss_rate=loss_rate/rate_num;sub(/\.[1-9]*/,"",loss_rate)};print "loss_rate:"loss_rate,"min:"min,"max:"max,"avg:"avg,"jitter:"max-min}' $ping_result >> $output_file
+}
+
+wan_speedtest() {
+    OUTPUT=$1
+    OUTPUT_TEMP=$(mktemp /tmp/wan_speed.XXXXXX)
+    if [[ $? -ne 0 ]]; then
+        rm -rf $LOCK_DIR
+        gen_error 2
+        exit 2
+    fi
+    killall -q netperf
+
+    measure_direction "up" $OUTPUT_TEMP
+    measure_direction "down" $OUTPUT_TEMP
+    get_latency $OUTPUT_TEMP
+
+    mv $OUTPUT_TEMP $OUTPUT
+    cat $OUTPUT
+}
+
+is_file_valid() {
+    local f=$1
+    local timeout=$2
+
+    [[ ! -f "$f" ]] && return 1
+
+    local now=$(date +%s)
+    local f_ts=$(stat -c %Y $f)
+    local delta=$(expr $now - $f_ts)
+
+    [[ $delta -gt $timeout ]] && return 1 || return 0
+}
+
+lock() {
+    local attempts=0
+    while [[ $attempts -lt $MAX_RETRY ]]; do
+        mkdir $LOCK_DIR 2> /dev/null && break
+        attempts=$((attempts + 1))
+        pid=$(cat $PID_FILE 2> /dev/null)
+        if [[ -n "$pid" ]]; then
+            if [[ -d "/proc/$pid" ]]; then
+                [[ -n "$DEBUG" ]] && echo $$ "waits for $attempts"
+                sleep 1
+            else
+                [[ -n "$DEBUG" ]] && echo "WARNING: Lockfile detected but process $(cat $PID_FILE) does not exist"
+                rm -rf $LOCK_DIR
+            fi
+        fi
+    done
+    if [[ $attempts -eq $MAX_RETRY ]]; then
+        [[ -n "$DEBUG" ]] && echo "failed to get the lock"
+        gen_error 4
+        exit 4
+    fi
+    mkdir $LOCK_DIR 2> /dev/null
+    echo $$ > $PID_FILE
+    [[ -n "$DEBUG" ]] && echo $$ "got lock after $attempts attempts"
+    trap '' INT
+}
+
+unlock() {
+    rm -rf $LOCK_DIR
+    [[ -n "$DEBUG" ]] && echo $$ "released lock"
+    trap "kill $$" INT
+}
+
+### main section
+
+lock
+# use output cache if not expired if no force
+if [[ "$FORCE" == "0" ]]; then
+    if is_file_valid "$OUTPUT" $OUTPUT_EXPIRE; then
+        gen_error 0
+        cat "$OUTPUT"
+        unlock
+        exit 0
+    fi
+else
+    rm -f $OUTPUT
+fi
+
+# checkout network reachable
+unreachable=$(ping -4 -c 1 -q $TESTHOST 2>&1 | grep -c -E 'unreachable|bad')
+if [[ $unreachable -eq 1 ]]; then
+    unlock
+    gen_error 1
+    exit 1
+fi
+
+# spaw the testing task
+(
+    wan_speedtest "$OUTPUT"
+    unlock
+) > /dev/null &
+echo $! > $PID_FILE
+# we have to exit in advance when a new testing is on going
+gen_error 3
+exit 3

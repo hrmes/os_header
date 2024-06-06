@@ -1,0 +1,72 @@
+#!/bin/sh
+
+SYNC_API_URL="https://firmware.merckuwifi.com/checkip.txt"
+API_LIST="/tmp/checkip.txt"
+PUBLIC_IP=
+
+IP_RULE='^((2(5[0-5]|[0-4]\d))|[0-1]?\d{1,2})(\.((2(5[0-5]|[0-4]\d))|[0-1]?\d{1,2})){3}$'
+
+sync_list() {
+    curl -s --connect-timeout 10 -m 20 -k -L $SYNC_API_URL > $API_LIST
+}
+
+show_list() {
+    [[ -s $API_LIST ]] || sync_list
+    cat $API_LIST
+}
+
+get_ip() {
+    [[ -s $API_LIST ]] || sync_list
+
+    cat $API_LIST | while read LINE; do
+        case $LINE in
+            http*) ;;
+
+            *)
+                rm -rf $API_LIST
+                exit 1
+                ;;
+        esac
+        PUBLIC_IP=$(curl -s --connect-timeout 10 -m 20 -k -L $LINE 2> /dev/null)
+        RESULT=$(echo "$PUBLIC_IP" | grep -E "$IP_RULE")
+        if [[ -n "$RESULT" ]]; then
+            echo $RESULT
+            exit 0
+        fi
+    done
+    if [[ -n $PUBLIC_IP ]]; then
+        exit 0
+    else
+        echo "0.0.0.0"
+        exit 1
+    fi
+
+}
+
+show_help() {
+    echo "mercku_get_public_ip <ACTION>"
+    echo "ACTION:"
+    echo "    show         : show pubilc ip list"
+    echo "    get          : get pubilc ip "
+    echo "    sync         : sync api list"
+}
+
+do_work() {
+    CMD=$1
+    case $CMD in
+        "show")
+            show_list
+            ;;
+        "get")
+            get_ip
+            ;;
+        "sync")
+            sync_list
+            ;;
+        *)
+            show_help
+            ;;
+    esac
+}
+
+do_work $1

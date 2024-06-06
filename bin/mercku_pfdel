@@ -1,0 +1,47 @@
+#!/bin/sh
+# 本脚本用于添加 portforwarding 规则
+
+CHAIN_NAME=$1
+DST_IP=$2
+DST_PORT_RANGE=$3
+SRC_IP=$4
+SRC_PORT_RANGE=$5
+SRC_PROTOCOL=$6
+RULE_NAME=$7
+
+print_usage() {
+    echo "Usage: $0 <chain_name> <dst_ip> <dst_port_range: 1-10> <src_ip> <src_port_range: 1-10> <proto: tcp|udp|tcp&udp> <rule_name>"
+}
+
+FILTER_CHAIN=${CHAIN_NAME}_filter
+NAT_CHAIN=${CHAIN_NAME}_nat
+
+
+
+[ -z "$CHAIN_NAME" ] && print_usage && exit 1
+[ -z "$DST_IP" ] && print_usage && exit 1
+[ -z "$DST_PORT_RANGE" ] && print_usage && exit 1
+[ -z "$SRC_IP" ] && print_usage && exit 1
+[ -z "$SRC_PORT_RANGE" ] && print_usage && exit 1
+[ -z "$SRC_PROTOCOL" ] && print_usage && exit 1
+[ -z "$RULE_NAME" ] && print_usage && exit 1
+
+RULE_NAME_FILTER=${RULE_NAME}_filter
+RULE_NAME_NAT=${RULE_NAME}_nat
+
+SRC_PORT_RANGE_WITH_COMMA=${SRC_PORT_RANGE/-/:}
+DST_PORT_RANGE_WITH_COMMA=${DST_PORT_RANGE/-/:}
+
+del_rule() {
+    echo "del_rule for $1"
+    proto=$1
+    filter_name=${RULE_NAME_FILTER}_${proto}
+    nat_name=${RULE_NAME_NAT}_${proto}
+    iptables -D ${FILTER_CHAIN} -p ${proto} -d ${DST_IP} --dport ${DST_PORT_RANGE_WITH_COMMA} -j ACCEPT -m comment --comment ${filter_name} && \
+    iptables -t nat -D ${NAT_CHAIN} -s $SRC_IP -p ${proto} -m ${proto} --dport $SRC_PORT_RANGE_WITH_COMMA -j DNAT --to-destination ${DST_IP}:${DST_PORT_RANGE} -m comment --comment "$nat_name" || echo "fail to delete nat chain ${NAT_CHAIN}"
+    return 0
+}
+
+
+echo $SRC_PROTOCOL | grep -q "tcp" && del_rule "tcp" || echo "del tcp failed"
+echo $SRC_PROTOCOL | grep -q "udp" && del_rule "udp"  || echo "del udp failed"

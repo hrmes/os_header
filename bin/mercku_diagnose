@@ -1,0 +1,128 @@
+#!/bin/sh
+
+# mercku_tool <ping|traceroute|nslookup> <host> [debug]
+#   diagnose network conditions
+#
+# return 0: success
+#        1: diagnosis in progress
+#        2: network diagnostic failed
+#
+# OUTPUT file format (result are missing if code is not 0):
+# code:<error_code>
+# result:xxx
+
+# Globals
+# host name
+HOST=
+# commond
+CMD=
+# cached diagnose result
+OUTPUT=/tmp/diagnose
+# mutex to avoid multiple tests
+LOCK_DIR=/var/lock/network_diagnose
+PID_FILE=$LOCK_DIR/pid
+# seconds to wait to acquire the lock
+MAX_RETRY=2
+# print debug info
+DEBUG=
+
+trap "rm -rf $LOCK_DIR" INT
+
+gen_error() {
+    echo "code:$1"
+}
+
+print_usage() {
+    echo "mercku_diagnose <ping|traceroute|nslookup> <host> [force] [debug]" > /dev/console
+    gen_error 2
+    exit 2
+}
+
+lock() {
+    local attempts=0
+    while [[ $attempts -lt $MAX_RETRY ]]; do
+        mkdir $LOCK_DIR 2> /dev/null && break
+        attempts=$((attempts + 1))
+        pid=$(cat $PID_FILE 2> /dev/null)
+        if [[ -n "$pid" ]]; then
+            if [[ -d "/proc/$pid" ]]; then
+                [[ -n "$DEBUG" ]] && echo $$ "waits for $attempts" > /dev/console
+                sleep 1
+            else
+                [[ -n "$DEBUG" ]] && echo "WARNING: Lockfile detected but process $(cat $PID_FILE) does not exist" > /dev/console
+                rm -rf $LOCK_DIR
+            fi
+        fi
+    done
+    if [[ $attempts -eq $MAX_RETRY ]]; then
+        [[ -n "$DEBUG" ]] && echo "failed to get the lock" > /dev/console
+        gen_error 1
+        exit 1
+    fi
+    mkdir $LOCK_DIR 2> /dev/null
+    echo $$ > $PID_FILE
+    [[ -n "$DEBUG" ]] && echo $$ "got lock after $attempts attempts" > /dev/console
+    trap '' INT
+}
+
+unlock() {
+    rm -rf $LOCK_DIR
+    [[ -n "$DEBUG" ]] && echo $$ "released lock" > /dev/console
+    trap "kill $$" INT
+}
+
+start_diagnose() {
+    case $CMD in
+        "ping")
+            ping $HOST -c 5 > $OUTPUT 2>&1
+            ;;
+        "traceroute")
+            traceroute -q 1 -w 2 -I $HOST > $OUTPUT 2>&1
+            ;;
+        "nslookup")
+            nslookup $HOST > $OUTPUT 2>&1
+            ;;
+        *)
+            echo "uknown parameter, please try again" > $OUTPUT
+            ;;
+    esac
+}
+
+stop_last_diagnose() {
+    killall ping > /dev/null 2>&1
+    killall traceroute > /dev/null 2>&1
+    killall nslookup > /dev/null 2>&1
+    rm -rf $LOCK_DIR > /dev/null 2>&1
+    rm $OUTPUT > /dev/null 2>&1
+    [[ -n "$DEBUG" ]] && echo $$ "released lock" > /dev/console
+}
+
+### main section
+
+[[ $# -lt 2 ]] && print_usage
+CMD=$1
+HOST=$2
+FORCE=$3
+[[ -n "$4" ]] && DEBUG=$4
+[[ "$FORCE" = "true" ]] && stop_last_diagnose
+
+# if $OUTPUT exists,it means the diagnosis is over
+lock
+if [[ -f "$OUTPUT" ]]; then
+    [[ -n "$DEBUG" ]] && echo $$ "read diagnose result" > /dev/console
+    gen_error 0
+    cat $OUTPUT
+    rm "$OUTPUT"
+    unlock
+    exit 0
+else
+    [[ -n "$DEBUG" ]] && echo $$ "start diagnose" > /dev/console
+    (
+        start_diagnose
+        unlock
+    ) > /dev/null &
+    echo $! > $PID_FILE
+fi
+
+gen_error 1
+exit 1

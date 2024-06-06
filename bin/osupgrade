@@ -1,0 +1,44 @@
+#!/bin/sh
+
+os_dir=$1
+target_dir=${2:-/}
+
+print_usage() {
+    echo "Usage: $0 <os_dir> [target_dir]"
+    echo "  os_dir: the directory of the OS files"
+    echo "  target_dir: the directory of the target"
+}
+
+check_dir() {
+    os_dir=$1
+    if [ ! -d $os_dir ]; then
+        echo "Error: $os_dir is not a directory"
+        print_usage
+        exit 1
+    fi
+    if [ ! -d $os_dir/usr ]; then
+        echo "Error: missing /usr directory in $os_dir"
+        print_usage
+        exit 1
+    fi
+    if [ ! -d $os_dir/etc ]; then
+        echo "Error: missing /etc directory in $os_dir"
+        print_usage
+        exit 1
+    fi
+
+    if [ ! -d $os_dir/web ]; then
+        echo "Error: missing /web directory in $os_dir"
+        print_usage
+        exit 1
+    fi
+}
+
+if [ -z $os_dir ]; then
+    print_usage
+    exit 1
+fi
+
+check_dir $os_dir
+cp -r $os_dir/* $target_dir/
+echo "MerckuOS has been installed, please reboot the device"

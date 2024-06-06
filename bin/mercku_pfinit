@@ -1,0 +1,41 @@
+#!/bin/sh
+# 本脚本用于初始化 portforwarding 规则，包括创建自定义链和添加规则。
+
+CHAIN_NAME=$1
+WAN_INTERFACE=$2
+
+FILTER_CHAIN=${CHAIN_NAME}_filter
+NAT_CHAIN=${CHAIN_NAME}_nat
+
+init_filter() {
+    # 检查 NAT 表中是否已经存在名为 ${CHAIN_NAME} 的自定义链。有则直接返回。
+    iptables -t filter -n -L ${FILTER_CHAIN} > /dev/null  2>&1
+    [[ $? -eq 0 ]] && return 0
+    # 新建一个自定义链, 用于过滤
+    iptables -t filter -N ${FILTER_CHAIN}
+    # 将该自定义链添加到过滤（filter）表的 FORWARD 链中的第四个位置（-I 选项表示插入规则），以便处理转发的数据包。 
+    iptables -t filter -I FORWARD 4 -j ${FILTER_CHAIN}
+    # 在自定义链中添加规则，如果数据包不是来自 WAN 接口，则立即返回，不进一步处理。感叹号用于取反。
+    iptables -t filter -I ${FILTER_CHAIN} ! -i ${WAN_INTERFACE} -j RETURN
+}
+
+init_nat() {
+    # 检查 NAT 表中是否已经存在名为 ${CHAIN_NAME} 的自定义链。有则直接返回。
+    iptables -t nat -n -L ${NAT_CHAIN} > /dev/null  2>&1
+    [[ $? -eq 0 ]] && return 0
+    # 新建一个自定义链，用于过滤。
+    iptables -t nat -N ${NAT_CHAIN}
+    # 将该自定义链添加到 NAT 表的 PREROUTING 链中的第一个位置（-I 选项表示插入规则），以便处理转发的数据包。
+    iptables -t nat -I PREROUTING -j ${NAT_CHAIN}
+    # 在自定义链中添加规则，如果数据包不是来自 WAN 接口，则立即返回，不进一步处理。
+    iptables -t nat -I ${NAT_CHAIN} ! -i ${WAN_INTERFACE} -j RETURN
+}
+
+print_usage() {
+    echo "Usage: $0 <chain_name> <wan_interface>"
+}
+
+[ -z "$WAN_INTERFACE" ] && print_usage && exit 1
+[ -z "$CHAIN_NAME" ] && print_usage && exit 1
+
+init_filter && init_nat

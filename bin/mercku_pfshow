@@ -1,0 +1,21 @@
+#!/bin/sh
+# 本脚本用于展示 portforwarding 规则
+
+CHAIN_NAME=$1
+
+FILTER_CHAIN=${CHAIN_NAME}_filter
+NAT_CHAIN=${CHAIN_NAME}_nat
+
+show() {
+    iptables -t filter -L ${FILTER_CHAIN}
+    iptables -t nat -L ${NAT_CHAIN}
+}
+
+print_usage() {
+    echo "Usage: $0 <chain_name>"
+}
+
+[ -z "$CHAIN_NAME" ] && print_usage && exit 1
+
+show
+

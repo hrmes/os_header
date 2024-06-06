@@ -1,0 +1,30 @@
+#!/bin/sh
+# 本脚本用于清除 portforwarding 规则，包括创建自定义链和添加规则。
+
+CHAIN_NAME=$1
+
+FILTER_CHAIN=${CHAIN_NAME}_filter
+NAT_CHAIN=${CHAIN_NAME}_nat
+
+
+clear_filter() {
+    #   filter
+    iptables -t filter -F ${FILTER_CHAIN}
+    iptables -t filter -D FORWARD -j ${FILTER_CHAIN}
+    iptables -t filter -X ${FILTER_CHAIN}
+}
+
+clear_nat() {
+    #   nat
+    iptables -t nat -F ${NAT_CHAIN}
+    iptables -t nat -D PREROUTING -j ${NAT_CHAIN}
+    iptables -t nat -X ${NAT_CHAIN}
+}
+
+print_usage() {
+    echo "Usage: $0 <chain_name>"
+}
+
+[ -z "$CHAIN_NAME" ] && print_usage && exit 1
+
+clear_nat && clear_filter
