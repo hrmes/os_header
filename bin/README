@@ -1,0 +1,30 @@
+# 应用说明
+## 服务
+### appd
+长驻服务。负责与 mercku api_server 通信，供 app 调用。
+
+### nocd
+长驻服务。负责与 mercku noc_server 通信，供 noc 调用。
+
+### mercku_syncd
+长驻服务。负责 mesh 内部业务配置同步，如 region code 等。
+
+### mercku_noded
+长驻服务，仅 mesh 从节点启动。负责 mesh 从节点上的 rpc 响应处理。
+
+### webd
+长驻服务。负责提供 webui 访问。它本身不直接提供 webserver 能力。
+
+### led_gardian
+长驻服务。负责 led 灯光逻辑的处理。
+
+## 工具
+### mercku_sysupgrade
+工具。实际进行系统升级的工具。
+
+### mcron
+封装所有 mercku 需要的定时任务。需要第1分钟调用一次。
+
+### mtool
+封装当前 mercku 系统提供的命令行工具，未来会统一到这个工具中。可直接执行查看其 help 信息。
+
