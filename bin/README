@@ -18,6 +18,9 @@
 ### led_gardian
 长驻服务。负责 led 灯光逻辑的处理。
 
+### asyncd
+长驻服务。负责执行异步任务。
+
 ## 工具
 ### mercku_sysupgrade
 工具。实际进行系统升级的工具。
